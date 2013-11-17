@@ -38,7 +38,7 @@
 
 #include "SynaImage_ds5.h"
 
-#ifdef CONFIG_TOUCHSCREEN_SWEEP2WAKE_QPNP_PON
+#ifdef CONFIG_TOUCHSCREEN_SWEEP2WAKE_PREVENT_SLEEP
 #include <linux/input/sweep2wake.h>
 #endif
 
@@ -462,6 +462,12 @@ static void touch_fw_upgrade_func(struct work_struct *work_fw_upgrade)
 	saved_state = ts->curr_pwr_state;
 	if (ts->curr_pwr_state == POWER_ON) {
 		disable_irq(ts->client->irq);
+#ifdef CONFIG_TOUCHSCREEN_SWEEP2WAKE_PREVENT_SLEEP
+		if (irq_wake) {
+			irq_wake = false;
+			disable_irq_wake(ts->client->irq);
+		}
+#endif
 	}
 	else {
 		touch_power_cntl(ts, POWER_ON);
@@ -478,6 +484,12 @@ static void touch_fw_upgrade_func(struct work_struct *work_fw_upgrade)
 	if (saved_state == POWER_ON) {
 		touch_ic_init(ts);
 		enable_irq(ts->client->irq);
+#ifdef CONFIG_TOUCHSCREEN_SWEEP2WAKE_PREVENT_SLEEP
+		if (!irq_wake) {
+			irq_wake = true;
+			enable_irq_wake(ts->client->irq);
+		}
+#endif
 	}
 	else {
 		touch_power_cntl(ts, POWER_OFF);
@@ -510,10 +522,10 @@ static void touch_init_func(struct work_struct *work_init)
 	if (!ts->curr_resume_state) {
 		enable_irq(ts->client->irq);
 		mutex_unlock(&ts->input_dev->mutex);
-#ifdef CONFIG_TOUCHSCREEN_SWEEP2WAKE
-		if (irq_wake) {
-			irq_wake = false;
-			disable_irq_wake(ts->client->irq);
+#ifdef CONFIG_TOUCHSCREEN_SWEEP2WAKE_PREVENT_SLEEP
+		if (!irq_wake) {
+			irq_wake = true;
+			enable_irq_wake(ts->client->irq);
 		}
 #endif
 		return;
@@ -523,10 +535,10 @@ static void touch_init_func(struct work_struct *work_init)
 	touch_ic_init(ts);
 	enable_irq(ts->client->irq);
 
-#ifdef CONFIG_TOUCHSCREEN_SWEEP2WAKE
-	if (irq_wake) {
-		irq_wake = false;
-		disable_irq_wake(ts->client->irq);
+#ifdef CONFIG_TOUCHSCREEN_SWEEP2WAKE_PREVENT_SLEEP
+	if (!irq_wake) {
+		irq_wake = true;
+		enable_irq_wake(ts->client->irq);
 	}
 #endif
 
@@ -545,7 +557,7 @@ static void touch_recover_func(struct work_struct *work_recover)
 				struct synaptics_ts_data, work_recover);
 
 	disable_irq(ts->client->irq);
-#ifdef CONFIG_TOUCHSCREEN_SWEEP2WAKE
+#ifdef CONFIG_TOUCHSCREEN_SWEEP2WAKE_PREVENT_SLEEP
 	if (irq_wake) {
 		irq_wake = false;
 		disable_irq_wake(ts->client->irq);
@@ -554,9 +566,9 @@ static void touch_recover_func(struct work_struct *work_recover)
 	safety_reset(ts);
 	touch_ic_init(ts);
 	enable_irq(ts->client->irq);
-#ifdef CONFIG_TOUCHSCREEN_SWEEP2WAKE
+#ifdef CONFIG_TOUCHSCREEN_SWEEP2WAKE_PREVENT_SLEEP
 	if (!irq_wake) {
-		irq_wake = false;
+		irq_wake = true;
 		enable_irq_wake(ts->client->irq);
 	}
 #endif
@@ -588,7 +600,7 @@ static int touch_ic_init(struct synaptics_ts_data *ts)
 err_out_retry:
 	ts->ic_init_err_cnt++;
 	disable_irq_nosync(ts->client->irq);
-#ifdef CONFIG_TOUCHSCREEN_SWEEP2WAKE
+#ifdef CONFIG_TOUCHSCREEN_SWEEP2WAKE_PREVENT_SLEEP
 	if (irq_wake) {
 		irq_wake = false;
 		disable_irq_wake(ts->client->irq);
@@ -1440,7 +1452,7 @@ static ssize_t store_ts_reset(struct device *dev,
 	sscanf(buf, "%s", string);
 
 	disable_irq_nosync(ts->client->irq);
-#ifdef CONFIG_TOUCHSCREEN_SWEEP2WAKE
+#ifdef CONFIG_TOUCHSCREEN_SWEEP2WAKE_PREVENT_SLEEP
 	if (irq_wake) {
 		irq_wake = false;
 		disable_irq_wake(ts->client->irq);
@@ -1483,9 +1495,9 @@ static ssize_t store_ts_reset(struct device *dev,
 		touch_ic_init(ts);
 
 	enable_irq(ts->client->irq);
-#ifdef CONFIG_TOUCHSCREEN_SWEEP2WAKE
+#ifdef CONFIG_TOUCHSCREEN_SWEEP2WAKE_PREVENT_SLEEP
 	if (!irq_wake) {
-		irq_wake = false;
+		irq_wake = true;
 		enable_irq_wake(ts->client->irq);
 	}
 #endif
@@ -1752,7 +1764,7 @@ static int lcd_notifier_callback(struct notifier_block *this,
 #endif
 		break;
 	case LCD_EVENT_OFF_START:
-#ifdef CONFIG_TOUCHSCREEN_SWEEP2WAKE
+#ifdef CONFIG_TOUCHSCREEN_SWEEP2WAKE_PREVENT_SLEEP
 		if (s2w_switch == 0)
 #endif
 		{
@@ -1762,15 +1774,14 @@ static int lcd_notifier_callback(struct notifier_block *this,
 		}
 		break;
 	case LCD_EVENT_OFF_END:
-#ifdef CONFIG_TOUCHSCREEN_SWEEP2WAKE
+#ifdef CONFIG_TOUCHSCREEN_SWEEP2WAKE_PREVENT_SLEEP
 		if (s2w_switch == 0)
 #endif
 		{
 			synaptics_ts_stop(ts);
 			mutex_unlock(&ts->input_dev->mutex);
 		}
-#ifdef CONFIG_TOUCHSCREEN_SWEEP2WAKE
-		scr_suspended = true;
+#ifdef CONFIG_TOUCHSCREEN_SWEEP2WAKE_PREVENT_SLEEP
 		if (!irq_wake) {
 			irq_wake = true;
 			enable_irq_wake(ts->client->irq);
@@ -1782,6 +1793,61 @@ static int lcd_notifier_callback(struct notifier_block *this,
 	}
 
 	return 0;
+}
+
+#ifdef CONFIG_TOUCHSCREEN_SWEEP2WAKE
+static ssize_t touch_synaptics_sweep2wake_show(struct device *dev,
+		struct device_attribute *attr, char *buf)
+{
+	size_t count = 0;
+
+	count += sprintf(buf, "%d\n", s2w_switch);
+
+	return count;
+}
+
+static ssize_t touch_synaptics_sweep2wake_dump(struct device *dev,
+		struct device_attribute *attr, const char *buf, size_t count)
+{
+	if (buf[0] >= '0' && buf[0] <= '2' && buf[1] == '\n')
+                if (s2w_switch != buf[0] - '0')
+		        s2w_switch = buf[0] - '0';
+
+	return count;
+}
+
+static DEVICE_ATTR(sweep2wake, (S_IWUSR|S_IRUGO),
+	touch_synaptics_sweep2wake_show, touch_synaptics_sweep2wake_dump);
+#endif
+
+static struct kobject *android_touch_kobj;
+
+static int touch_synaptics_sysfs_init(void)
+{
+	int ret ;
+
+	android_touch_kobj = kobject_create_and_add("android_touch", NULL) ;
+	if (android_touch_kobj == NULL) {
+		pr_debug("[touch_synaptics]%s: subsystem_register failed\n", __func__);
+		ret = -ENOMEM;
+		return ret;
+	}
+#ifdef CONFIG_TOUCHSCREEN_SWEEP2WAKE
+	ret = sysfs_create_file(android_touch_kobj, &dev_attr_sweep2wake.attr);
+	if (ret) {
+		printk(KERN_ERR "[sweep2wake]%s: sysfs_create_file failed\n", __func__);
+		return ret;
+	}
+#endif
+	return 0 ;
+}
+
+static void touch_synaptics_sysfs_deinit(void)
+{
+#ifdef CONFIG_TOUCHSCREEN_SWEEP2WAKE
+	sysfs_remove_file(android_touch_kobj, &dev_attr_sweep2wake.attr);
+#endif
+	kobject_del(android_touch_kobj);
 }
 
 static int synaptics_ts_probe(
@@ -1875,6 +1941,8 @@ static int synaptics_ts_probe(
 		goto err_input_dev_alloc_failed;
 	}
 
+	touch_synaptics_sysfs_init();
+
 	ts->input_dev->name = "touch_dev";
 
 	set_bit(EV_SYN, ts->input_dev->evbit);
@@ -1909,7 +1977,11 @@ static int synaptics_ts_probe(
 	gpio_direction_input(ts->pdata->irq_gpio);
 
 	ret = request_threaded_irq(client->irq, NULL, touch_irq_handler,
-			IRQF_TRIGGER_FALLING | IRQF_ONESHOT | IRQF_NO_SUSPEND | IRQF_EARLY_RESUME, client->name, ts);
+#ifdef CONFIG_TOUCHSCREEN_SWEEP2WAKE_PREVENT_SLEEP
+			IRQF_TRIGGER_FALLING | IRQF_ONESHOT | IRQF_NO_SUSPEND, client->name, ts);
+#else
+			IRQF_TRIGGER_FALLING | IRQF_ONESHOT, client->name, ts);
+#endif
 
 	if (ret < 0) {
 		TOUCH_ERR_MSG("request_irq failed. use polling mode\n");
@@ -1980,6 +2052,7 @@ static int synaptics_ts_remove(struct i2c_client *client)
 	struct synaptics_ts_data *ts = i2c_get_clientdata(client);
 	int i;
 
+	touch_synaptics_sysfs_deinit();
 	for (i = 0; i < ARRAY_SIZE(synaptics_device_attrs); i++) {
 		device_remove_file(&client->dev,
 				&synaptics_device_attrs[i]);
