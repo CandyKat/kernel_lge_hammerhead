@@ -131,7 +131,6 @@ static int mdss_dsi_panel_power_on(struct mdss_panel_data *pdata, int enable)
 				panel_data);
 	pr_debug("%s: enable=%d\n", __func__, enable);
 
-	cmds_panel_data = pdata;
 
 	if (enable) {
 		if (ctrl_pdata->power_data.num_vreg > 0) {
